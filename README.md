@@ -25,13 +25,15 @@ pip install .
 ### Basic Example
 
 ```python
+import json
 from config_plane.impl.memory import create_memory_config_repo
 
 # Initialize repo
 repo = create_memory_config_repo({})
 
-# Set configuration values
-repo.set("app", {"name": "MyService", "debug": True})
+# Set configuration values (must be bytes)
+config_data = {"name": "MyService", "debug": True}
+repo.set("app", json.dumps(config_data).encode("utf-8"))
 
 # Check dirty state
 if repo.is_dirty():
@@ -40,9 +42,11 @@ if repo.is_dirty():
 # Commit changes
 repo.commit()
 
-# Read values
-config = repo.get("app")
-print(config)
+# Read values (returns bytes)
+raw_config = repo.get("app")
+if raw_config:
+    config = json.loads(raw_config)
+    print(config)
 ```
 
 ### Git Backend
@@ -54,7 +58,7 @@ from config_plane.impl.git import create_git_config_repo
 repo_path = Path("./my-config-repo")
 repo = create_git_config_repo(repo_path)
 
-repo.set("server", {"host": "0.0.0.0"})
+repo.set("server", b'{"host": "0.0.0.0"}')
 repo.commit()
 ```
 
@@ -72,7 +76,7 @@ Session = sessionmaker(bind=engine)
 
 # Initialize Repo
 repo = create_sql_config_repo(Session)
-repo.set("feature_flags", {"dark_mode": True})
+repo.set("feature_flags", b'{"dark_mode": true}')
 repo.commit()
 ```
 
