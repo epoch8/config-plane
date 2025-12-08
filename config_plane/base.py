@@ -78,6 +78,13 @@ class ConfigStage:
 
 
 class ConfigRepo:
+    """
+    Repository managing configuration snapshots and stages.
+
+    Repo is configured with a shared state of snapshots/branches/blobs and local
+    state of staged changes
+    """
+
     @classmethod
     def create(cls) -> "ConfigRepo":
         return cls()
