@@ -48,6 +48,30 @@ def _(pprint, r):
 
 
 @app.cell
+def _(r):
+    r.set("k", {"v": 2})
+    return
+
+
+@app.cell
+def _(pprint, r):
+    pprint(r)
+    return
+
+
+@app.cell
+def _(r):
+    r.commit()
+    return
+
+
+@app.cell
+def _(pprint, r):
+    pprint(r)
+    return
+
+
+@app.cell
 def _():
     return
 
