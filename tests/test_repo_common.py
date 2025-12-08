@@ -88,7 +88,8 @@ def test_repo_lifecycle(tmp_path: Path, provider_cls: type[RepoProvider]):
     repo = repo_provider.create(tmp_path)
     try:
         # Test 1: Set initial value and check dirty
-        repo.set("app", {"name": "MyApp", "version": 1})
+        val1 = b'{"name": "MyApp", "version": 1}'
+        repo.set("app", val1)
         assert repo.is_dirty() is True, "Repo should be dirty after set"
 
         # Test 2: Commit
@@ -97,16 +98,17 @@ def test_repo_lifecycle(tmp_path: Path, provider_cls: type[RepoProvider]):
 
         # Test 3: Read value
         val = repo.get("app")
-        assert val == {"name": "MyApp", "version": 1}, "Value mismatch after commit"
+        assert val == val1, "Value mismatch after commit"
 
         # Test 4: Modify value
-        repo.set("app", {"name": "MyApp", "version": 2})
+        val2 = b'{"name": "MyApp", "version": 2}'
+        repo.set("app", val2)
         assert repo.is_dirty() is True, "Repo should be dirty after modification"
 
         # Test 5: Commit again
         repo.commit()
         val = repo.get("app")
-        assert val == {"name": "MyApp", "version": 2}, "New value mismatch after update"
+        assert val == val2, "New value mismatch after update"
     finally:
         repo_provider.cleanup(repo)
 
@@ -117,7 +119,7 @@ def test_repo_persistence(tmp_path: Path, provider_cls: type[RepoProvider]):
     # Setup initial state
     try:
         repo1 = repo_provider.create(tmp_path)
-        repo1.set("db", {"host": "localhost"})
+        repo1.set("db", b'{"host": "localhost"}')
         repo1.commit()
         repo_provider.cleanup(repo1)
     except Exception:
@@ -129,7 +131,7 @@ def test_repo_persistence(tmp_path: Path, provider_cls: type[RepoProvider]):
         # Re-open repo
         repo2 = repo_provider.create(tmp_path)
         val = repo2.get("db")
-        assert val == {"host": "localhost"}, "Data should persist across instances"
+        assert val == b'{"host": "localhost"}', "Data should persist across instances"
     finally:
         if repo2:
             repo_provider.cleanup(repo2)

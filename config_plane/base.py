@@ -1,4 +1,4 @@
-Blob = dict
+Blob = bytes
 
 
 class ConfigSnapshot:
@@ -6,7 +6,7 @@ class ConfigSnapshot:
     Immutable snapshot of configuration data at a specific point in time.
     """
 
-    def get(self, key: str) -> dict | None:
+    def get(self, key: str) -> Blob | None:
         raise NotImplementedError()
 
 

@@ -2,7 +2,7 @@ from typing import Any
 
 from config_plane.base import ConfigRepo, ConfigSnapshot, ConfigStage, Blob
 
-MemoryRepoData = dict[str, dict[str, Any]]
+MemoryRepoData = dict[str, dict[str, Blob]]
 MemorySnapshotData = dict[str, Blob]
 
 
@@ -19,7 +19,7 @@ class MemoryConfigSnapshot(ConfigSnapshot):
                 p.text(f"data={self.data},")
                 p.breakable()
 
-    def get(self, key: str) -> dict | None:
+    def get(self, key: str) -> Blob | None:
         return self.data.get(key)
 
 

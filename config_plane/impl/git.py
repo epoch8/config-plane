@@ -1,4 +1,3 @@
-import json
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -18,22 +17,29 @@ def _run_git(cwd: Path, args: list[str]) -> str:
     return result.stdout.strip()
 
 
+def _run_git_bytes(cwd: Path, args: list[str]) -> bytes:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        capture_output=True,
+        check=True,
+    )
+    return result.stdout
+
+
 class GitConfigSnapshot(ConfigSnapshot):
     def __init__(self, repo_path: Path, commit_hash: str):
         self.repo_path = repo_path
         self.commit_hash = commit_hash
 
-    def get(self, key: str) -> dict | None:
+    def get(self, key: str) -> Blob | None:
         try:
-            # git show <commit>:<key>.json
-            content = _run_git(
-                self.repo_path, ["show", f"{self.commit_hash}:{key}.json"]
+            # git show <commit>:<key>
+            content = _run_git_bytes(
+                self.repo_path, ["show", f"{self.commit_hash}:{key}"]
             )
-            return json.loads(content)
+            return content
         except subprocess.CalledProcessError:
-            return None
-        except json.JSONDecodeError:
-            # Should not happen if we control writes, but safety first
             return None
 
     def _repr_pretty_(self, p: Any, cycle: bool) -> None:
@@ -49,12 +55,11 @@ class GitConfigStage(ConfigStage):
         self.snapshot = snapshot
 
     def get(self, key: str) -> Blob | None:
-        file_path = self.repo_path / f"{key}.json"
+        file_path = self.repo_path / f"{key}"
         if file_path.exists():
             try:
-                with open(file_path, "r") as f:
-                    return json.load(f)
-            except (json.JSONDecodeError, OSError):
+                return file_path.read_bytes()
+            except OSError:
                 return None
 
         # Fallback to snapshot if not on disk (meaning not modified/new, or deleted)
@@ -72,7 +77,7 @@ class GitConfigStage(ConfigStage):
         return None
 
     def set(self, key: str, value: Blob | None) -> None:
-        file_path = self.repo_path / f"{key}.json"
+        file_path = self.repo_path / f"{key}"
 
         if value is None:
             if file_path.exists():
@@ -80,8 +85,7 @@ class GitConfigStage(ConfigStage):
                 # We also need to tell git about the deletion if we want to be thorough,
                 # but `git add .` in freeze will catch it.
         else:
-            with open(file_path, "w") as f:
-                json.dump(value, f, indent=2)
+            file_path.write_bytes(value)
 
     def is_dirty(self) -> bool:
         # Check if there are changes

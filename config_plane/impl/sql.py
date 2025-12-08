@@ -2,7 +2,7 @@ from typing import Callable, Any
 
 
 from sqlalchemy import (
-    JSON,
+    LargeBinary,
     ForeignKey,
     select,
     insert,
@@ -19,7 +19,7 @@ class Base(DeclarativeBase):
 class BlobModel(Base):
     __tablename__ = "blobs"
     id: Mapped[int] = mapped_column(primary_key=True)
-    content: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
 
 
 class SnapshotModel(Base):
