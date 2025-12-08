@@ -151,6 +151,9 @@ class GitConfigRepo(ConfigRepo):
     def set(self, key: str, value: Blob | None) -> None:
         self.stage.set(key, value)
 
+    def is_dirty(self) -> bool:
+        return self.stage.is_dirty()
+
     def commit(self) -> None:
         self.base = self.stage.freeze()
         # After freeze, the stage is clean, so we can re-init it pointing to new base

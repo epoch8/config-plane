@@ -95,6 +95,9 @@ class MemoryConfigRepo(ConfigRepo):
     def set(self, key: str, value: Blob | None) -> None:
         self.stage.set(key, value)
 
+    def is_dirty(self) -> bool:
+        return self.stage.is_dirty()
+
     def commit(self) -> None:
         if not self.stage.is_dirty():
             return

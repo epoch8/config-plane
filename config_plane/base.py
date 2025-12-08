@@ -49,5 +49,8 @@ class ConfigRepo:
     def commit(self) -> None:
         raise NotImplementedError()
 
+    def is_dirty(self) -> bool:
+        raise NotImplementedError()
+
     # def switch_branch_and_pull(self, branch: str) -> SnapshotDiff:
     #     raise NotImplementedError()
