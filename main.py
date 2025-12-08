@@ -6,14 +6,19 @@ app = marimo.App()
 
 @app.cell
 def _():
-    import config_plane as cp
     from IPython.lib.pretty import pprint
-    return cp, pprint
+    return (pprint,)
 
 
 @app.cell
-def _(cp):
-    r = cp.ConfigRepo.create()
+def _():
+    from config_plane import create_memory_config_repo
+    return (create_memory_config_repo,)
+
+
+@app.cell
+def _(create_memory_config_repo):
+    r = create_memory_config_repo({})
     return (r,)
 
 
