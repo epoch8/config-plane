@@ -1,0 +1,13 @@
+[project]
+name = "demo"
+version = "0.1.0"
+description = "Demo of config plane functionality"
+requires-python = ">=3.12"
+dependencies = [
+    "config-plane",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
