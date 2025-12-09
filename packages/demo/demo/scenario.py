@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from loguru import logger
 
 from config_plane.impl.sql import create_sql_config_repo, Base
 from config_plane.impl.git import create_git_config_repo
@@ -21,14 +22,6 @@ GIT_REPO_PATH = TMP_DIR / "demo-config-repo"
 def run_step(step_num: int, title: str):
     print(f"\n=== Step {step_num}: {title} ===")
     time.sleep(1)
-
-
-def print_info(msg: str):
-    print(f"[INFO] {msg}")
-
-
-def commit_repo(repo):
-    repo.commit()
 
 
 def main():
@@ -83,12 +76,6 @@ def main():
         def create_repo(uri, branch="prod"):
             return create_sql_config_repo(SessionLocal, branch=branch)
 
-        def sync_push(repo, branch):
-            pass  # SQL is shared DB, no push
-
-        def sync_pull(repo, branch):
-            repo.reload()  # Just reload
-
     else:
         # Git Backend Setup
         # Structure:
@@ -134,16 +121,9 @@ def main():
                 uri, remote_url=str(origin_path), branch=branch
             )
 
-        def sync_push(repo, branch):
-            # Implemented in commit()
-            pass
-
-        def sync_pull(repo, branch):
-            repo.reload()
-
     # 1. Initialize Repository (prod)
     run_step(1, "Initialize Repository")
-    print_info(f"Creating {args.backend.upper()} Repo (Prod) at {prod_repo_uri}")
+    logger.info(f"Creating {args.backend.upper()} Repo (Prod) at {prod_repo_uri}")
 
     # Create initial state in Prod Repo
     # Start with master to ensure we have a valid HEAD before creating prod
@@ -158,7 +138,7 @@ def main():
         # In GitConfigRepo, commit() now pushes!
         # However, for the very first push of master?
         # Standard push origin master works.
-        commit_repo(repo)
+        repo.commit()
 
         # Now master exists on remote. Create prod using local helper.
         # But we want to create prod branch.
@@ -175,7 +155,7 @@ def main():
         # If I switched branch, stage is reloaded.
         # Let's just touch something.
         repo.set("meta", b"init-prod")
-        commit_repo(repo)
+        repo.commit()
 
         # Also ensure master is pushed if it wasn't?
         # The previous commit on master pushed it.
@@ -184,9 +164,9 @@ def main():
         repo = create_repo(prod_repo_uri, branch="prod")
         repo.set("feature_x_enabled", b"false")
         repo.set("theme", b"light")
-        commit_repo(repo)
+        repo.commit()
 
-    print_info("Initialized 'prod' with Feature X: Disabled, Theme: Light")
+    logger.info("Initialized 'prod' with Feature X: Disabled, Theme: Light")
 
     # 2. Start Production App
     run_step(2, "Start Production App")
@@ -219,7 +199,7 @@ def main():
 
     # 3. Start Development Session (Create dev branch)
     run_step(3, "Start Development Session")
-    print_info("Creating 'dev' branch from 'prod'")
+    logger.info("Creating 'dev' branch from 'prod'")
 
     if args.backend == "sql":
         # SQL: dev_repo connects to same DB
@@ -265,29 +245,29 @@ def main():
 
     # 4. Modify Configuration in Dev
     run_step(4, "Modify Configuration (in Dev)")
-    print_info("Enabling Feature X and changing Theme to Dark in 'dev'")
+    logger.info("Enabling Feature X and changing Theme to Dark in 'dev'")
 
     # Use a fresh repo instance to be sure (or reuse)
     dev_repo = create_repo(dev_repo_uri, branch="dev")
     dev_repo.set("feature_x_enabled", b"true")
     dev_repo.set("theme", b"dark")
     if dev_repo.is_dirty():
-        print_info("Changes staged...")
-    commit_repo(dev_repo)
+        logger.info("Changes staged...")
+    dev_repo.commit()
     # commit() pushes to origin automatically now
-    print_info("Changes committed to 'dev'")
+    logger.info("Changes committed to 'dev'")
 
-    print_info("Observing apps...")
+    logger.info("Observing apps...")
     time.sleep(10)
 
     # 5. Verify Isolation
     run_step(5, "Verify Isolation")
-    print_info("Production App should still show old config.")
+    logger.info("Production App should still show old config.")
     # (Visual check from output)
 
     # 6. Promote to Production
     run_step(6, "Promote to Production")
-    print_info("Merging 'dev' into 'prod'")
+    logger.info("Merging 'dev' into 'prod'")
 
     # Merge logic
     if args.backend == "sql":
@@ -297,7 +277,7 @@ def main():
         val_theme = repo_dev_read.get("theme")
         repo_prod.set("feature_x_enabled", val_feat)
         repo_prod.set("theme", val_theme)
-        commit_repo(repo_prod)
+        repo_prod.commit()
     else:
         # Git Merge:
         # We need to merge origin/dev into prod.
@@ -331,11 +311,11 @@ def main():
         # So we just need to push.
         subprocess.run(["git", "push", "origin", "prod"], cwd=path, check=True)
 
-    print_info("Promoted changes to 'prod'")
+    logger.info("Promoted changes to 'prod'")
 
     # 7. Production Update
     run_step(7, "Production Update")
-    print_info("Production App should pick up new config...")
+    logger.info("Production App should pick up new config...")
 
     if args.backend == "git":
         # Prod App (running in subprocess) loops reload().
@@ -345,7 +325,7 @@ def main():
 
     time.sleep(10)
 
-    print_info("Demo Complete. Terminating apps.")
+    logger.info("Demo Complete. Terminating apps.")
     prod_app.terminate()
     dev_app.terminate()
 

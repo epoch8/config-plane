@@ -5,6 +5,7 @@ description = "Demo of config plane functionality"
 requires-python = ">=3.12"
 dependencies = [
     "config-plane",
+    "loguru>=0.7.3",
 ]
 
 [build-system]
