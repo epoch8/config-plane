@@ -7,6 +7,7 @@ class ConfigSnapshot:
     """
 
     def get(self, key: str) -> Blob | None:
+        """Retrieve the content of a blob by its key."""
         raise NotImplementedError()
 
 
@@ -20,15 +21,19 @@ class ConfigStage:
     """
 
     def get(self, key: str) -> Blob | None:
+        """Retrieve the content of a blob by its key, checking staged changes first."""
         raise NotImplementedError()
 
     def set(self, key: str, value: Blob | None) -> None:
+        """Update or create a blob in the stage. Pass None to mark as deleted."""
         raise NotImplementedError()
 
     def is_dirty(self) -> bool:
+        """Check if there are any staged changes."""
         raise NotImplementedError()
 
     def freeze(self) -> ConfigSnapshot:
+        """Create a new immutable snapshot from the current stage."""
         raise NotImplementedError()
 
 
@@ -41,22 +46,33 @@ class ConfigRepo:
     """
 
     def get(self, key: str) -> Blob | None:
+        """Retrieve the content of a blob from the current stage."""
         raise NotImplementedError()
 
     def set(self, key: str, value: Blob | None) -> None:
+        """Update or create a blob in the current stage."""
         raise NotImplementedError()
 
     def commit(self) -> None:
+        """Commit the current stage to the repository history."""
         raise NotImplementedError()
 
     def is_dirty(self) -> bool:
+        """Check if the current stage has uncommitted changes."""
         raise NotImplementedError()
 
     def switch_branch(self, branch: str) -> None:
+        """Switch the current working branch."""
         raise NotImplementedError()
 
     def create_branch(self, new_branch: str, from_branch: str | None = None) -> None:
+        """Create a new branch, optionally starting from an existing one."""
         raise NotImplementedError()
 
     def list_branches(self) -> list[str]:
+        """List all available branches in the repository."""
+        raise NotImplementedError()
+
+    def merge(self, branch: str) -> None:
+        """Merge another branch into the current branch."""
         raise NotImplementedError()

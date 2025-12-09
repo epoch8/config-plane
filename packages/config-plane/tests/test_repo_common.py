@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Callable
+import subprocess
 
 
 import pytest
@@ -43,8 +44,62 @@ class MemoryRepoProvider(RepoProvider):
 
 class GitRepoProvider(RepoProvider):
     def create(self, path: Path) -> ConfigRepo:
-        repo_path = path / "git-repo"
-        return create_git_config_repo(repo_path)
+        origin_path = path / "origin"
+        if not origin_path.exists():
+            origin_path.mkdir()
+            # Init bare repo
+            subprocess.run(
+                ["git", "init", "--bare", "--initial-branch=master"],
+                cwd=origin_path,
+                check=True,
+                capture_output=True,
+            )
+            # To have 'master' branch available for cloning, we need a commit.
+            # We can clone it, commit, push.
+            init_cwd = path / "init_temp"
+            init_cwd.mkdir()
+            subprocess.run(
+                ["git", "clone", str(origin_path), "."],
+                cwd=init_cwd,
+                check=True,
+                capture_output=True,
+            )
+            # Config user
+            subprocess.run(
+                ["git", "config", "user.name", "Test"], cwd=init_cwd, check=True
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "test@test"], cwd=init_cwd, check=True
+            )
+
+            # Commit
+            subprocess.run(
+                ["git", "commit", "--allow-empty", "-m", "Init"],
+                cwd=init_cwd,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "push", "origin", "master"], cwd=init_cwd, check=True
+            )
+
+            # Cleanup
+            import shutil
+
+            shutil.rmtree(init_cwd)
+
+        # We need a unique path for each repo instance if we want them to cooperate or be distinct
+        # But this provider mainly tests single repo lifecycle or persistence on same path.
+        # Persistence test calls create() twice.
+        # If we use strict persistence test which reuses the same path, we need to handle that.
+
+        # However, `create_git_config_repo` now clones if empty.
+        # If we pass the same `work_path`, it will just reuse it.
+        # But `test_repo_persistence` uses `tmp_path`.
+
+        # We should use a specific subdir for the "local" repo
+        work_path = path / "work-repo"
+
+        return create_git_config_repo(work_path, remote_url=str(origin_path))
 
 
 class SqlRepoProvider(RepoProvider):

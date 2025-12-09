@@ -43,6 +43,8 @@ def main():
         help="Backend type (default: sql)",
     )
 
+    parser.add_argument("--remote-url", default=None, help="Remote Git Configuration")
+
     args = parser.parse_args()
 
     if args.backend == "sql":
@@ -66,7 +68,12 @@ def main():
         # Git Backend
         debug_print(f"{args.name} starting on branch '{args.branch}' (Git)...")
         # For Git, repo_uri is the path to the repo directory
-        repo = create_git_config_repo(args.repo_uri, branch=args.branch)
+        if not args.remote_url:
+            debug_print("ERROR: --remote-url required for git backend")
+            sys.exit(1)
+        repo = create_git_config_repo(
+            args.repo_uri, remote_url=args.remote_url, branch=args.branch
+        )
 
     while True:
         try:

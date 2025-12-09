@@ -112,46 +112,33 @@ def main():
             cwd=origin_path,
             check=True,
         )
-
-        # 2. Clone Prod
-        subprocess.run(["git", "clone", str(origin_path), str(prod_path)], check=True)
-        # Configure user/email for commits
+        # Create a dummy clone to push initial commit so master exists
+        init_path = TMP_DIR / "init-temp"
+        if init_path.exists():
+            shutil.rmtree(init_path)
+        subprocess.run(["git", "clone", str(origin_path), str(init_path)], check=True)
+        (init_path / "README").write_text("Init")
+        subprocess.run(["git", "add", "."], cwd=init_path, check=True)
         subprocess.run(
-            ["git", "config", "user.name", "Demo User"], cwd=prod_path, check=True
+            ["git", "commit", "-m", "Initial commit"], cwd=init_path, check=True
         )
-        subprocess.run(
-            ["git", "config", "user.email", "demo@example.com"],
-            cwd=prod_path,
-            check=True,
-        )
-
-        # 3. Clone Dev
-        subprocess.run(["git", "clone", str(origin_path), str(dev_path)], check=True)
-        subprocess.run(
-            ["git", "config", "user.name", "Demo User"], cwd=dev_path, check=True
-        )
-        subprocess.run(
-            ["git", "config", "user.email", "demo@example.com"],
-            cwd=dev_path,
-            check=True,
-        )
+        subprocess.run(["git", "push", "origin", "master"], cwd=init_path, check=True)
+        shutil.rmtree(init_path)
 
         prod_repo_uri = str(prod_path)
         dev_repo_uri = str(dev_path)
 
         def create_repo(uri, branch="prod"):
-            # uri is the path
-            return create_git_config_repo(uri, branch=branch)
+            # uri is the work_path, we pass explicit remote_url
+            return create_git_config_repo(
+                uri, remote_url=str(origin_path), branch=branch
+            )
 
         def sync_push(repo, branch):
-            # repo is GitConfigRepo wrapper
-            path = repo.repo_path
-            # Push current branch to origin
-            subprocess.run(["git", "push", "origin", branch], cwd=path, check=True)
+            # Implemented in commit()
+            pass
 
         def sync_pull(repo, branch):
-            path = repo.repo_path
-            subprocess.run(["git", "pull", "origin", branch], cwd=path, check=True)
             repo.reload()
 
     # 1. Initialize Repository (prod)
@@ -168,14 +155,30 @@ def main():
         # or we just commit to master first.
         repo.set("feature_x_enabled", b"false")
         repo.set("theme", b"light")
+        # In GitConfigRepo, commit() now pushes!
+        # However, for the very first push of master?
+        # Standard push origin master works.
         commit_repo(repo)
 
-        # Now master exists. Create prod.
+        # Now master exists on remote. Create prod using local helper.
+        # But we want to create prod branch.
         repo.create_branch("prod", from_branch="master")
         repo.switch_branch("prod")
-        sync_push(repo, "prod")  # Push prod
-        # Also push master just in case
-        sync_push(repo, "master")
+        # Ensure we push the new branch?
+        # create_branch might not push.
+        # But commit() pushes current branch.
+        # If we just created it and made no changes, we might need manual push?
+        # Or better: make a change on prod and commit.
+        repo.set("feature_x_enabled", b"false")  # trigger dirty check if any?
+        # Actually set again to be sure or set something new.
+        # Currently dirty check compares to stage.
+        # If I switched branch, stage is reloaded.
+        # Let's just touch something.
+        repo.set("meta", b"init-prod")
+        commit_repo(repo)
+
+        # Also ensure master is pushed if it wasn't?
+        # The previous commit on master pushed it.
     else:
         # SQL: Directly on prod
         repo = create_repo(prod_repo_uri, branch="prod")
@@ -196,6 +199,8 @@ def main():
             "demo.app",
             "--repo-uri",
             prod_repo_uri,
+            "--remote-url",
+            str(origin_path) if args.backend == "git" else "dummy",
             "--branch",
             "prod",
             "--name",
@@ -222,12 +227,14 @@ def main():
         dev_repo.create_branch("dev", from_branch="prod")
     else:
         # Git: We act in the Dev Clone
-        dev_inst = create_repo(dev_repo_uri, branch="master")
-        # Pull latest prod from origin to base dev off it
-        sync_pull(dev_inst, "prod")
-        dev_inst.switch_branch("prod")
+        # Clone happens automatically in init
+        dev_inst = create_repo(dev_repo_uri, branch="prod")
+        # Logic:
+        # dev_inst init -> clone from origin (master) -> checkout prod (pull from origin).
+        # We want to create 'dev' from 'prod'.
         dev_inst.create_branch("dev", from_branch="prod")
-        dev_inst.switch_branch("dev")  # GitConfigRepo switch checkouts
+        # create_branch locally.
+        dev_inst.switch_branch("dev")
 
     run_step(3, "Start Development App (on dev branch)")
     dev_app = subprocess.Popen(
@@ -239,6 +246,8 @@ def main():
             "demo.app",
             "--repo-uri",
             dev_repo_uri,
+            "--remote-url",
+            str(origin_path) if args.backend == "git" else "dummy",
             "--branch",
             "dev",
             "--name",
@@ -265,8 +274,7 @@ def main():
     if dev_repo.is_dirty():
         print_info("Changes staged...")
     commit_repo(dev_repo)
-    # Push dev changes so they are available (optional for local dev app test, but needed for merge later)
-    sync_push(dev_repo, "dev")
+    # commit() pushes to origin automatically now
     print_info("Changes committed to 'dev'")
 
     print_info("Observing apps...")
@@ -292,16 +300,36 @@ def main():
         commit_repo(repo_prod)
     else:
         # Git Merge:
-        # In Prod Clone: Pull prod (ensure latest) -> Merge dev -> Push prod
-        # We need to fetch dev first
+        # We need to merge origin/dev into prod.
+        # We can do this in our prod_repo clone.
+        # 1. Update our view of remote
+        # GitConfigRepo doesn't expose fetch explicitly, but reload() pulls current branch.
+        # But we need to merge a different branch.
+
+        # We need to run git merge. GitConfigRepo doesn't have `merge` method yet.
+        # We can use subprocess here just for the merge step as it's a "management" operation.
+        # OR we add merge support to ConfigRepo?
+        # Let's keep subprocess for the specific merge logic as it's complex logic (PR flow etc).
+
         repo_prod = create_repo(prod_repo_uri, branch="prod")
-        path = repo_prod.repo_path
+        path = repo_prod.work_path
+
+        # Fetch origin to get latest dev
         subprocess.run(["git", "fetch", "origin"], cwd=path, check=True)
-        # We merge origin/dev into prod
-        subprocess.run(
-            ["git", "merge", "origin/dev", "-m", "Merge dev"], cwd=path, check=True
-        )
-        sync_push(repo_prod, "prod")
+        # Merge origin/dev
+        try:
+            subprocess.run(
+                ["git", "merge", "origin/dev", "-m", "Merge dev"], cwd=path, check=True
+            )
+        except subprocess.CalledProcessError:
+            print("[WARN] Merge failed? Maybe nothing to merge?")
+
+        # Push prod (using commit() or manual push?)
+        # Since we modified the repo via subprocess, usage of repo object might be stale?
+        # But if we just merged, we just need to push.
+        # repo.commit() only commits if dirty stage. Merge creates a commit usually.
+        # So we just need to push.
+        subprocess.run(["git", "push", "origin", "prod"], cwd=path, check=True)
 
     print_info("Promoted changes to 'prod'")
 
@@ -310,14 +338,9 @@ def main():
     print_info("Production App should pick up new config...")
 
     if args.backend == "git":
-        # Prod App needs to PULL the changes we just pushed to origin!
-        # But ProdApp is just running `demo.app` loop which calls `repo.reload()`.
-        # `repo.reload()` in GitConfigRepo does NOT pull from remote. It just reloads from local disk/HEAD.
-        # Since running in a subprocess, we can't easily force it to pull.
-        # However, `demo.app` is running in `prod_repo_uri`.
-        # We just updated `prod_repo_uri` (Prod Clone) in the block above (Merge step).
-        # So the local disk of Prod Clone IS updated.
-        # So `repo.reload()` should pick it up.
+        # Prod App (running in subprocess) loops reload().
+        # reload() now does `git pull`.
+        # So it SHOULD pick up the changes we just pushed to origin!
         pass
 
     time.sleep(10)

@@ -140,6 +140,15 @@ class MemoryConfigRepo(ConfigRepo):
     def list_branches(self) -> list[str]:
         return list(self.repo.keys())
 
+    def merge(self, branch: str) -> None:
+        if branch not in self.repo:
+            raise ValueError(f"Branch '{branch}' does not exist")
+
+        # Simple overlay merge: copy everything from source to stage
+        source_data = self.repo[branch]
+        for key, value in source_data.items():
+            self.stage.set(key, value)
+
 
 def create_memory_config_repo(repo: MemoryRepoData) -> MemoryConfigRepo:
     return MemoryConfigRepo(repo)

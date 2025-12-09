@@ -97,6 +97,7 @@ class SqlConfigStage(ConfigStage):
         self.session_maker = session_maker
         self.parent = parent_snapshot
         self.snapshot_id = stage_snapshot_id
+        self.merge_parent_id: int | None = None
 
     def _repr_pretty_(self, p: Any, cycle: bool) -> None:
         if cycle:
@@ -278,7 +279,7 @@ class SqlConfigRepo(ConfigRepo):
                 )
             else:
                 self._init_stage_from_branch(session)
-            
+
             session.commit()
 
         self.stage = SqlConfigStage(
