@@ -68,10 +68,14 @@ class MemoryConfigStage(ConfigStage):
 
 
 class MemoryConfigRepo(ConfigRepo):
-    def __init__(self, repo_data: MemoryRepoData) -> None:
+    def __init__(self, repo_data: MemoryRepoData, branch: str = "master") -> None:
         self.repo = repo_data
+        self.branch = branch
 
-        self.base = MemoryConfigSnapshot(self.repo.get("master", {}))
+        self.reload()
+
+    def reload(self) -> None:
+        self.base = MemoryConfigSnapshot(self.repo.get(self.branch, {}))
         self.stage = MemoryConfigStage(self.base)
 
     def _repr_pretty_(self, p: Any, cycle: bool) -> None:
@@ -79,6 +83,8 @@ class MemoryConfigRepo(ConfigRepo):
             p.text("ConfigRepo(...)")
         else:
             with p.group(4, "ConfigRepo(", ")"):
+                p.breakable()
+                p.text(f"branch='{self.branch}',")
                 p.breakable()
                 p.text("base=")
                 p.pretty(self.base)
@@ -104,11 +110,36 @@ class MemoryConfigRepo(ConfigRepo):
 
         new_base = self.stage.freeze()
         assert isinstance(new_base, MemoryConfigSnapshot)
-        self.repo["master"] = new_base.data
+        self.repo[self.branch] = new_base.data
         self.base = new_base
 
         self.stage = MemoryConfigStage(self.base)
 
+    def switch_branch(self, branch: str) -> None:
+        if self.is_dirty():
+            raise RuntimeError("Cannot switch branch with dirty stage")
+        self.branch = branch
+        self.reload()
 
-def create_memory_config_repo(repo: MemoryRepoData) -> ConfigRepo:
+    def create_branch(self, new_branch: str, from_branch: str | None = None) -> None:
+        if new_branch in self.repo:
+            raise ValueError(f"Branch '{new_branch}' already exists")
+
+        source = from_branch or self.branch
+        if source not in self.repo and source != "master":
+            # If source is master and empty, it defaults to empty dict in reload,
+            # but here strict check might be better.
+            # However, existing code assumes lazy creation of master in some sense?
+            # Actually repo_data is passed in.
+            pass
+
+        data = self.repo.get(source, {})
+        # Deep copy needed? Blobs are bytes (immutable), dict shallow copy is enough
+        self.repo[new_branch] = data.copy()
+
+    def list_branches(self) -> list[str]:
+        return list(self.repo.keys())
+
+
+def create_memory_config_repo(repo: MemoryRepoData) -> MemoryConfigRepo:
     return MemoryConfigRepo(repo)

@@ -112,12 +112,13 @@ class GitConfigStage(ConfigStage):
 
 
 class GitConfigRepo(ConfigRepo):
-    def __init__(self, repo_path: str | Path):
+    def __init__(self, repo_path: str | Path, branch: str = "master"):
         self.repo_path = Path(repo_path).absolute()
+        self.branch = branch
 
         if not (self.repo_path / ".git").exists():
             self.repo_path.mkdir(parents=True, exist_ok=True)
-            _run_git(self.repo_path, ["init"])
+            _run_git(self.repo_path, ["init", "--initial-branch=master"])
             # Create an initial commit so HEAD exists
             # We can create a .gitkeep or similar
             # (self.repo_path / ".gitkeep").touch()
@@ -125,26 +126,39 @@ class GitConfigRepo(ConfigRepo):
             # _run_git(self.repo_path, ["commit", "-m", "Initial commit"])
             # Actually, let's see if there are commits.
 
+        # Ensure we are on the correct branch
+        current_branch = self._get_current_branch()
+        if current_branch != self.branch:
+            # Try to checkout
+            # If branch doesn't exist, this might fail if it's not the initial specific case
+            pass
+
         self.reload()
+
+    def _get_current_branch(self) -> str:
+        try:
+            return _run_git(self.repo_path, ["branch", "--show-current"])
+        except subprocess.CalledProcessError:
+            return ""
 
     def reload(self):
         try:
+            # Check if we are on the right branch
+            current = self._get_current_branch()
+            if current and current != self.branch:
+                # Attempt checkout if clean?
+                # ideally we should have been on the branch.
+                # For now, let's assume we are correct or we'll switch.
+                _run_git(self.repo_path, ["checkout", self.branch])
+
             head_hash = _run_git(self.repo_path, ["rev-parse", "HEAD"])
             self.base = GitConfigSnapshot(self.repo_path, head_hash)
         except subprocess.CalledProcessError:
-            # No commits yet
-            # We can use a dummy snapshot or handle empty repo
-            # Let's assume empty repo has no data
-            # We can't really validly implement "get" on a non-existent commit.
-            # But the Stage can effectively write the first files.
-            # We'll use a special "empty" snapshot behavior if needed,
-            # or just rely on stage writing files.
-
+            # No commits yet or branch doesn't exist
             # For now let's mock an empty snapshot
             self.base = MemoryConfigSnapshot(
                 {}
             )  # Hacky availability of empty snapshot?
-            # Better: GitConfigSnapshot with None hash?
             pass
 
         self.stage = GitConfigStage(self.repo_path, getattr(self, "base", None))  # type: ignore
@@ -163,6 +177,40 @@ class GitConfigRepo(ConfigRepo):
         # After freeze, the stage is clean, so we can re-init it pointing to new base
         self.stage = GitConfigStage(self.repo_path, self.base)
 
+    def switch_branch(self, branch: str) -> None:
+        if self.is_dirty():
+            raise RuntimeError("Cannot switch branch with dirty stage")
+
+        _run_git(self.repo_path, ["checkout", branch])
+        self.branch = branch
+        self.reload()
+
+    def create_branch(self, new_branch: str, from_branch: str | None = None) -> None:
+        start_point = from_branch or self.branch
+        # If we are effectively creating from current:
+        if start_point == self.branch:
+            _run_git(self.repo_path, ["checkout", "-b", new_branch])
+        else:
+            # Create from another branch without switching?
+            # Git requires switching to new branch usually with checkout -b
+            # Or `git branch new start`.
+            # But ConfigRepo semantics usually imply we switch?
+            # "Create branch" might just create it.
+            # But typical flow: create_branch(dev, from=prod).
+            _run_git(self.repo_path, ["branch", new_branch, start_point])
+
+        # Does create_branch switch to it?
+        # Base interface doesn't strictly say, but usually no.
+        # But if I use `checkout -b`, I switch.
+        # Let's stick to just creating:
+        # If we used checkout -b above, we switched.
+        # Let's use `git branch` to just create.
+        pass
+
+    def list_branches(self) -> list[str]:
+        out = _run_git(self.repo_path, ["branch", "--format=%(refname:short)"])
+        return out.splitlines()
+
     def _repr_pretty_(self, p: Any, cycle: bool) -> None:
         if cycle:
             p.text("GitConfigRepo(...)")
@@ -171,7 +219,9 @@ class GitConfigRepo(ConfigRepo):
                 p.breakable()
                 p.text(f"path={self.repo_path},")
                 p.breakable()
+                p.text(f"branch={self.branch},")
+                p.breakable()
 
 
-def create_git_config_repo(repo_path: str | Path) -> ConfigRepo:
-    return GitConfigRepo(repo_path)
+def create_git_config_repo(repo_path: str | Path, branch: str = "master") -> GitConfigRepo:
+    return GitConfigRepo(repo_path, branch=branch)

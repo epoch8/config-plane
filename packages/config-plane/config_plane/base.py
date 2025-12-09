@@ -52,5 +52,11 @@ class ConfigRepo:
     def is_dirty(self) -> bool:
         raise NotImplementedError()
 
-    # def switch_branch_and_pull(self, branch: str) -> SnapshotDiff:
-    #     raise NotImplementedError()
+    def switch_branch(self, branch: str) -> None:
+        raise NotImplementedError()
+
+    def create_branch(self, new_branch: str, from_branch: str | None = None) -> None:
+        raise NotImplementedError()
+
+    def list_branches(self) -> list[str]:
+        raise NotImplementedError()

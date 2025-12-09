@@ -3,3 +3,8 @@ members = ["packages/*"]
 
 [tool.uv.sources]
 config-plane = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.1.0",
+]
