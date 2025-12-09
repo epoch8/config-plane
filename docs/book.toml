@@ -1,0 +1,9 @@
+[book]
+authors = ["Config Plane Team"]
+language = "en"
+
+src = "src"
+title = "Config Plane Documentation"
+
+[output.html]
+git-repository-url = "https://github.com/epoch8/config-plane"
