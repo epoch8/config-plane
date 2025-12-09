@@ -6,9 +6,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from config_plane.base import ConfigRepo
+from config_plane.impl.git import create_git_config_repo
 from config_plane.impl.sql import create_sql_config_repo, Base
-# from config_plane.impl.git import create_git_config_repo  # If needed later
-# from config_plane.impl.memory import create_memory_config_repo # If needed later
 
 
 def debug_print(msg: str):
@@ -37,29 +36,37 @@ def main():
         "--poll-interval", type=int, default=2, help="Poll interval in seconds"
     )
     parser.add_argument("--name", default="App", help="App Instance Name")
+    parser.add_argument(
+        "--backend",
+        choices=["sql", "git"],
+        default="sql",
+        help="Backend type (default: sql)",
+    )
 
     args = parser.parse_args()
 
-    # For SQL backend, repo-uri is database URL
-    # We assume SQL backend for this demo as per requirements
-    # Initialize infrastructure
-    # Add timeout for concurrency
-    engine = create_engine(args.repo_uri, connect_args={"timeout": 1})
-    Base.metadata.create_all(engine)
+    if args.backend == "sql":
+        # For SQL backend, repo-uri is database URL
+        # We assume SQL backend for this demo as per requirements
+        # Initialize infrastructure
+        # Add timeout for concurrency
+        engine = create_engine(args.repo_uri, connect_args={"timeout": 1})
+        Base.metadata.create_all(engine)
 
-    # Enable WAL mode for better concurrency (handled by scenario or ignored if fails)
-    with engine.connect() as conn:
-        conn.exec_driver_sql("PRAGMA journal_mode=WAL")
+        # Enable WAL mode for better concurrency (handled by scenario or ignored if fails)
+        with engine.connect() as conn:
+            conn.exec_driver_sql("PRAGMA journal_mode=WAL")
 
-    SessionLocal = sessionmaker(bind=engine)
+        SessionLocal = sessionmaker(bind=engine)
 
-    # Ensure tables exist (app shouldn't technically do this, but for demo simplicity)
-    # Base.metadata.create_all(engine) # This line is now active above
-
-    debug_print(f"{args.name} starting on branch '{args.branch}'...")
-
-    # Initialize repo once
-    repo = create_sql_config_repo(SessionLocal, branch=args.branch)
+        # Initialize repo once
+        debug_print(f"{args.name} starting on branch '{args.branch}' (SQL)...")
+        repo = create_sql_config_repo(SessionLocal, branch=args.branch)
+    else:
+        # Git Backend
+        debug_print(f"{args.name} starting on branch '{args.branch}' (Git)...")
+        # For Git, repo_uri is the path to the repo directory
+        repo = create_git_config_repo(args.repo_uri, branch=args.branch)
 
     while True:
         try:
