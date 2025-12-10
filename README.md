@@ -2,7 +2,7 @@
 
 GIT for your application user-modified configs
 
-`config-plane` allows you to manage runtime user provided configuration as a code. It supports using SQL database or GIT as a storage backend for flexibility
+`config-plane` allows you to manage runtime user provided configuration as you manage your code. It allows editing configuration in dev, create a commit and apply tested configuration in prod. The same workflow you use for your code. It supports using SQL database or GIT as a storage backend for flexibility
 
 ## Key Features
 
