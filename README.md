@@ -1,6 +1,6 @@
 # config-plane
 
-A structured, transactional configuration management library for Python applications.
+GIT for your application user-modified configs
 
 `config-plane` allows you to manage runtime user provided configuration as a code. It supports using SQL database or GIT as a storage backend for flexibility
 
