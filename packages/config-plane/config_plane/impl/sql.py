@@ -443,94 +443,78 @@ class SqlConfigRepo(ConfigRepo):
             # Update stage parent
             self.stage.parent = self.parent_snapshot
 
+    def get_branch_head(self, branch: str | None = None) -> int | None:
+        """Return snapshot id for branch head, if any"""
+        with self.session_maker() as session:
+            branch_model = session.execute(
+                select(BranchModel).where(BranchModel.name == (branch or self.branch))
+            ).scalar_one_or_none()
+            return branch_model.snapshot_id if branch_model else None
 
-def get_branch_head(session_maker: Callable[[], Session], branch: str) -> int | None:
-    """Return snapshot id for branch head, if any"""
-    with session_maker() as session:
-        branch_model = session.execute(
-            select(BranchModel).where(BranchModel.name == branch)
-        ).scalar_one_or_none()
-        return branch_model.snapshot_id if branch_model else None
+    def set_branch_head(self, branch: str, snapshot_id: int) -> None:
+        """Point branch to a snapshot, creating the branch if necessary"""
+        with self.session_maker() as session:
+            branch_model = session.execute(
+                select(BranchModel).where(BranchModel.name == branch)
+            ).scalar_one_or_none()
+            if branch_model:
+                branch_model.snapshot_id = snapshot_id
+            else:
+                branch_model = BranchModel(name=branch, snapshot_id=snapshot_id)
+                session.add(branch_model)
+            session.commit()
 
+    def get_snapshot_blob(self, snapshot_id: int, key: str) -> Blob | None:
+        """Fetch a blob payload by snapshot id + key"""
+        with self.session_maker() as session:
+            item = session.execute(
+                select(SnapshotItemModel).where(
+                    SnapshotItemModel.snapshot_id == snapshot_id,
+                    SnapshotItemModel.key == key,
+                )
+            ).scalar_one_or_none()
+            if item is None or item.blob_id is None:
+                return None
 
-def set_branch_head(session_maker: Callable[[], Session], branch: str, snapshot_id: int) -> None:
-    """Point branch to a snapshot, creating the branch if necessary"""
-    with session_maker() as session:
-        branch_model = session.execute(
-            select(BranchModel).where(BranchModel.name == branch)
-        ).scalar_one_or_none()
-        if branch_model:
-            branch_model.snapshot_id = snapshot_id
-        else:
-            branch_model = BranchModel(name=branch, snapshot_id=snapshot_id)
-            session.add(branch_model)
-        session.commit()
+            blob = session.execute(
+                select(BlobModel).where(BlobModel.id == item.blob_id)
+            ).scalar_one_or_none()
+            return blob.content if blob else None
 
+    def snapshot_exists(self, snapshot_id: int) -> bool:
+        """Return True if snapshot id exists"""
+        with self.session_maker() as session:
+            found = session.execute(
+                select(SnapshotModel.id).where(SnapshotModel.id == snapshot_id)
+            ).scalar_one_or_none()
+            return found is not None
 
-def get_snapshot_blob(session_maker: Callable[[], Session], snapshot_id: int, key: str) -> Blob | None:
-    """Fetch a blob payload by snapshot id + key"""
-    with session_maker() as session:
-        item = session.execute(
-            select(SnapshotItemModel).where(
-                SnapshotItemModel.snapshot_id == snapshot_id,
-                SnapshotItemModel.key == key,
-            )
-        ).scalar_one_or_none()
-        if item is None or item.blob_id is None:
-            return None
+    def commit_if_changed(self, key: str, blob: Blob | None) -> int | None:
+        """Commit blobs only if they differ from branch head."""
+        return self.commit_if_changed_many({key: blob})
 
-        if item.blob:
-            return item.blob.content
+    def commit_if_changed_many(self, blob_map: Mapping[str, Blob | None]) -> int | None:
+        if not blob_map:
+            return self.get_branch_head()
 
-        blob = session.execute(  # fallback fetch by blob_id
-            select(BlobModel).where(BlobModel.id == item.blob_id)
-        ).scalar_one_or_none()
-        return blob.content if blob else None
+        head_id = self.get_branch_head()
+        if head_id is not None:
+            unchanged = True
+            for k, v in blob_map.items():
+                existing = self.get_snapshot_blob(head_id, k)
+                if existing != v:
+                    unchanged = False
+                    break
+            if unchanged:
+                return head_id
 
-
-def snapshot_exists(session_maker: Callable[[], Session], snapshot_id: int) -> bool:
-    """Return True if snapshot id exists"""
-    with session_maker() as session:
-        found = session.execute(
-            select(SnapshotModel.id).where(SnapshotModel.id == snapshot_id)
-        ).scalar_one_or_none()
-        return found is not None
-
-
-def commit_if_changed(
-    session_maker: Callable[[], Session],
-    branch: str,
-    key: str | Mapping[str, Blob | None],
-    blob: Blob | None = None,
-) -> int | None:
-    """Commit blobs only if they differ from branch head."""
-    if isinstance(key, Mapping):
-        blob_map = dict(key)
-    else:
-        blob_map = {key: blob}
-
-    if not blob_map:
-        return get_branch_head(session_maker, branch)
-
-    head_id = get_branch_head(session_maker, branch)
-    if head_id is not None:
-        unchanged = True
         for k, v in blob_map.items():
-            existing = get_snapshot_blob(session_maker, head_id, k)
-            if existing != v:
-                unchanged = False
-                break
-        if unchanged:
-            return head_id
+            self.set(k, v)
+        self.commit()
 
-    repo = create_sql_config_repo(session_maker, branch=branch)
-    for k, v in blob_map.items():
-        repo.set(k, v)
-    repo.commit()
-
-    if repo.parent_snapshot:
-        return repo.parent_snapshot.snapshot_id
-    return repo.stage_snapshot_id
+        if self.parent_snapshot:
+            return self.parent_snapshot.snapshot_id
+        return self.stage_snapshot_id
 
 
 def create_sql_config_repo(
