@@ -1,0 +1,24 @@
+name: Package {{ package.name }}
+
+on:
+  push:
+    paths:
+      - "{{ package.path }}/**"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install the latest version of uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install deps
+        run: |
+          cd {{ package.path }}
+          uv sync
+
+      - name: Check formatting
+        run: uv run ruff check {{ package.path }}
+
+      - name: Run tests
+        run: uv run pytest {{ package.path }}
