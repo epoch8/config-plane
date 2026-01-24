@@ -26,7 +26,7 @@ jobs:
           uv sync
 
       - name: Check formatting
-        run: uv run ruff check packages/config-plane
+        run: uvx ruff check packages/config-plane
 
       - name: Run tests
         run: uv run pytest packages/config-plane
