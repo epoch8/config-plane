@@ -1,7 +1,6 @@
 import pytest
 import subprocess
-from pathlib import Path
-from config_plane.impl.git import create_git_config_repo, GitConfigRepo
+from config_plane.impl.git import create_git_config_repo
 
 
 @pytest.fixture
