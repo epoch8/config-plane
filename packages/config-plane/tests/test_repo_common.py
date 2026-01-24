@@ -290,3 +290,39 @@ def test_branch_manipulation(tmp_path: Path, provider_cls: type[RepoProvider]):
 
     finally:
         repo_provider.cleanup(repo)
+
+
+@pytest.mark.parametrize("provider_cls", PROVIDERS, ids=PROVIDER_IDS)
+def test_set_branch_snapshot_id(tmp_path: Path, provider_cls: type[RepoProvider]):
+    repo_provider = provider_cls()
+    repo = repo_provider.create(tmp_path)
+    try:
+        # Create initial snap
+        repo.set("a", b"1")
+        repo.commit()
+        snap1 = repo.get_branch_snapshot_id()
+        assert snap1 is not None
+
+        # Create second snap
+        repo.set("a", b"2")
+        repo.commit()
+        snap2 = repo.get_branch_snapshot_id()
+        assert snap2 != snap1
+
+        # Verify current state
+        assert repo.get("a") == b"2"
+
+        # Reset to snap1
+        repo.set_branch_snapshot_id(snap1)
+
+        # Verify branch head moved
+        assert repo.get_branch_snapshot_id() == snap1
+
+        # Verify content reverted
+        assert repo.get("a") == b"1"
+
+        # Verify stage is clean (optional, but good sanity)
+        assert not repo.is_dirty()
+
+    finally:
+        repo_provider.cleanup(repo)

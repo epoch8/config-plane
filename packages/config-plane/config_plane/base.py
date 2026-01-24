@@ -121,3 +121,19 @@ class ConfigRepo:
         Merge another branch into the current branch.
         """
         raise NotImplementedError()
+
+    def get_branch_snapshot_id(self, branch: str | None = None) -> str | None:
+        """
+        Return snapshot id for branch head, if any. If branch is None, returns
+        current branch head.
+        """
+        raise NotImplementedError()
+
+    def set_branch_snapshot_id(
+        self, snapshot_id: str, branch: str | None = None
+    ) -> None:
+        """
+        Force branch head to specific snapshot id. If branch is None, updates
+        current branch. Warning: This is a forceful operation (reset).
+        """
+        raise NotImplementedError()

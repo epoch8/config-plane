@@ -193,6 +193,18 @@ class MemoryConfigRepo(ConfigRepo):
     def get_branch_snapshot_id(self, branch: str | None = None) -> str | None:
         return self.branches.get(branch or self.branch)
 
+    def set_branch_snapshot_id(
+        self, snapshot_id: str, branch: str | None = None
+    ) -> None:
+        target_branch = branch or self.branch
+        if snapshot_id not in self.snapshots:
+            raise ValueError(f"Snapshot {snapshot_id} does not exist")
+
+        self.branches[target_branch] = snapshot_id
+
+        if target_branch == self.branch:
+            self.reload()
+
     def snapshot_exists(self, snapshot_id: str) -> bool:
         return snapshot_id in self.snapshots
 

@@ -520,6 +520,39 @@ class SqlConfigRepo(ConfigRepo):
             ).scalar_one_or_none()
             return str(branch_model.snapshot_id) if branch_model else None
 
+    def set_branch_snapshot_id(
+        self, snapshot_id: str, branch: str | None = None
+    ) -> None:
+        """Force branch head to specific snapshot id."""
+        target_branch = branch or self.branch
+
+        # Verify snapshot exists
+        if not self.snapshot_exists(snapshot_id):
+            raise ValueError(f"Snapshot {snapshot_id} does not exist")
+
+        snap_id_int = int(snapshot_id)
+
+        with self.session_maker() as session:
+            branch_model = session.execute(
+                select(BranchModel).where(BranchModel.name == target_branch)
+            ).scalar_one_or_none()
+
+            if branch_model:
+                branch_model.snapshot_id = snap_id_int
+            else:
+                # Create branch if it doesn't exist
+                branch_model = BranchModel(name=target_branch, snapshot_id=snap_id_int)
+                session.add(branch_model)
+
+            session.commit()
+
+        # If we updated the current branch, we must reload the stage
+        if target_branch == self.branch:
+            with self.session_maker() as session:
+                self._init_stage_from_branch(session)
+                session.commit()
+            self._refresh_stage_object()
+
     def get_snapshot_blob(self, snapshot_id: int, key: str) -> Blob | None:
         """Fetch a blob payload by snapshot id + key"""
         with self.session_maker() as session:

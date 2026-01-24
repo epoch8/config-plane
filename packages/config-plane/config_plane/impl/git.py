@@ -218,6 +218,26 @@ class GitConfigRepo(ConfigRepo):
         except subprocess.CalledProcessError:
             return None
 
+    def set_branch_snapshot_id(
+        self, snapshot_id: str, branch: str | None = None
+    ) -> None:
+        target_branch = branch or self.branch
+        # Verify snapshot (commit) exists
+        if not self.snapshot_exists(snapshot_id):
+            raise ValueError(f"Snapshot {snapshot_id} does not exist")
+
+        if target_branch == self.branch:
+            # We are on the branch, so we can hard reset
+            _run_git(self.work_path, ["reset", "--hard", snapshot_id])
+            # Push changes to remote (force push required) BEFORE reload to prevent pulling back old state
+            _run_git(self.work_path, ["push", "-f", "origin", target_branch])
+            self.reload()
+        else:
+            # We are not on the branch, so force update the branch ref
+            _run_git(self.work_path, ["branch", "-f", target_branch, snapshot_id])
+            # Push changes to remote (force push required)
+            _run_git(self.work_path, ["push", "-f", "origin", target_branch])
+
     def snapshot_exists(self, snapshot_id: str) -> bool:
         try:
             _run_git(self.work_path, ["cat-file", "-e", f"{snapshot_id}^{{commit}}"])
