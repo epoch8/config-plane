@@ -1,3 +1,11 @@
+"""
+Sql implementation of ConfigRepo.
+
+This implementation assumes that snapshots are FULL snapshots, not incremental.
+Each snapshot contains references to all keys present in that snapshot;
+traversing the parent tree is not required to reconstruct the state.
+"""
+
 from typing import Callable, Any, Mapping
 
 
@@ -472,93 +480,35 @@ class SqlConfigRepo(ConfigRepo):
 
             other_snap_id = other_branch.snapshot_id
 
-        # We need to fetch all items for that snapshot (recursively resolving parents?)
-        # SqlConfigSnapshot.get fetches one by one.
-        # Ideally we want a `get_all` or iterator.
-        # But ConfigSnapshot interface doesn't strictly have iteration.
-        # Wait, if we don't have iteration, how do we merge "everything"?
-        # MemoryRepo iterates `snapshot.data`.
-        # SqlConfigSnapshot doesn't expose data.
+            all_data = self._dump_snapshot(session, other_snap_id)
+            self.stage.set_many(all_data)
 
-        # We need to implement a way to dump the snapshot.
-        other_snap = SqlConfigSnapshot(self.session_maker, other_snap_id)
+    def _dump_snapshot(self, session: Session, snapshot_id: int) -> dict[str, Blob]:
+        """Get all kv pairs in a snapshot.
 
-        # Helper to dump:
-        all_data = self._dump_snapshot(other_snap_id)
-        self.stage.set_many(all_data)
-
-    def _dump_snapshot(self, snapshot_id: int) -> dict[str, Blob]:
-        """Flatten snapshot history to get all current kv pairs"""
-        # This can be expensive. We walk up the parents.
-        # Or we can do a recursive query or iterative python.
-        # Since we overlay: child overrides parent.
-        # We collect from root to leaf? No, from leaf to root is easier to just find set of keys,
-        # but to get values, maybe root to leaf is better to overwrite.
-
-        # 1. build lineage
-        with self.session_maker() as session:
-            chain = []
-            curr = snapshot_id
-            while curr is not None:
-                chain.append(curr)
-                snap = session.execute(
-                    select(SnapshotModel.parent_id).where(SnapshotModel.id == curr)
-                ).scalar_one()
-                curr = snap  # snap is just parent_id? No, scalar_one returns int?
-                # select(SnapshotModel.parent_id) returns int.
-
-            # Wait, scalar_one() on select(SnapshotModel.parent_id) returns the ID directly?
-            # Yes if we select column.
-
-            # Correct logic:
-            # snap = session.get(SnapshotModel, curr)
-            # curr = snap.parent_id
-            pass
-
-            # Better implementation of walking:
-            chain = []
-            curr = snapshot_id
-            while curr is not None:
-                chain.append(curr)
-                parent_id = session.execute(
-                    select(SnapshotModel.parent_id).where(SnapshotModel.id == curr)
-                ).scalar_one_or_none()
-                curr = parent_id
-
-        # Chain is [leaf, ..., root]
-        # We want to iterate from root to leaf to build partial
-        chain.reverse()
-
+        Since snapshots are full (not incremental), we only need to query the specific snapshot_id.
+        """
         result = {}
-        with self.session_maker() as session:
-            for snap_id in chain:
-                # Get all items in this snapshot
-                items = (
-                    session.execute(
-                        select(SnapshotItemModel).where(
-                            SnapshotItemModel.snapshot_id == snap_id
-                        )
-                    )
-                    .scalars()
-                    .all()
+        # Use simple query with the provided session
+        items = (
+            session.execute(
+                select(SnapshotItemModel).where(
+                    SnapshotItemModel.snapshot_id == snapshot_id
                 )
+            )
+            .scalars()
+            .all()
+        )
 
-                for item in items:
-                    if item.blob_id is None:
-                        # deletion
-                        result.pop(item.key, None)
-                    else:
-                        # fetch content
-                        # optimize: eager load?
-                        if item.blob:
-                            content = item.blob.content
-                        else:
-                            content = session.execute(
-                                select(BlobModel.content).where(
-                                    BlobModel.id == item.blob_id
-                                )
-                            ).scalar_one()
-                        result[item.key] = content
+        for item in items:
+            if item.blob_id is not None:
+                if item.blob:
+                    content = item.blob.content
+                else:
+                    content = session.execute(
+                        select(BlobModel.content).where(BlobModel.id == item.blob_id)
+                    ).scalar_one()
+                result[item.key] = content
 
         return result
 
