@@ -119,6 +119,10 @@ class GitConfigRepo(ConfigRepo):
                 self.work_path.parent,
                 ["clone", "-b", self.branch, self.remote_url, self.work_path.name],
             )
+            _run_git(self.work_path, ["config", "user.name", "Config Plane"])
+            _run_git(
+                self.work_path, ["config", "user.email", "config-plane@example.com"]
+            )
         else:
             # Optionally verification of checking remote origin could go here
             pass
