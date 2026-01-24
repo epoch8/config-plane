@@ -3,6 +3,7 @@ name: Package {{ package.name }}
 on:
   push:
     paths:
+      - ".github/workflows/package-{{ package.name }}.yml"
       - "{{ package.path }}/**"
 
 jobs:
