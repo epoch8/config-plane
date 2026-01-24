@@ -1,6 +1,11 @@
-# 0.1.1
+# Unreleased 0.2.0
 
-* added some SQL helpers for snapshot/branch access and commits
+* Expanded `ConfigRepo` and `ConfigStage` abstract interfaces (implemented for SQL, Git, and Memory backends):
+    * **New**: `set_many(blobs)` (replaces SQL-specific `commit_if_changed`) - optimized bulk updates with change detection.
+    * **New**: `get_branch_snapshot_id(branch)` - get the current snapshot ID for a branch.
+    * **New**: `snapshot_exists(snapshot_id)` - check for snapshot existence.
+    * **Changed**: `get(key, snapshot_id=None)` - now accepts optional snapshot ID to read historical data.
+* Added full **Git backend** (`create_git_config_repo`).
 
 # 0.1.0
 

@@ -1,3 +1,5 @@
+from typing import Mapping
+
 Blob = bytes
 
 
@@ -21,19 +23,36 @@ class ConfigStage:
     """
 
     def get(self, key: str) -> Blob | None:
-        """Retrieve the content of a blob by its key, checking staged changes first."""
+        """
+        Retrieve the content of a blob by its key, checking staged changes
+        first.
+        """
         raise NotImplementedError()
 
     def set(self, key: str, value: Blob | None) -> None:
-        """Update or create a blob in the stage. Pass None to mark as deleted."""
+        """
+        Update or create a blob in the stage. If the value is the same as the
+        base snapshot, does nothing. Pass None to mark as deleted.
+        """
+        self.set_many({key: value})
+
+    def set_many(self, blobs: Mapping[str, Blob | None]) -> None:
+        """
+        Update multiple blobs in the stage. If the value is the same as the base
+        snapshot, does nothing. Pass None to mark as deleted.
+        """
         raise NotImplementedError()
 
     def is_dirty(self) -> bool:
-        """Check if there are any staged changes."""
+        """
+        Check if there are any staged changes.
+        """
         raise NotImplementedError()
 
     def freeze(self) -> ConfigSnapshot:
-        """Create a new immutable snapshot from the current stage."""
+        """
+        Create a new immutable snapshot from the current stage.
+        """
         raise NotImplementedError()
 
 
@@ -45,34 +64,60 @@ class ConfigRepo:
     state of staged changes
     """
 
-    def get(self, key: str) -> Blob | None:
-        """Retrieve the content of a blob from the current stage."""
+    def get(self, key: str, snapshot_id: str | None = None) -> Blob | None:
+        """
+        Retrieve the content of a blob.
+        If snapshot_id is provided, fetches from that specific snapshot.
+        Otherwise, fetches from the current stage.
+        """
         raise NotImplementedError()
 
     def set(self, key: str, value: Blob | None) -> None:
-        """Update or create a blob in the current stage."""
+        """
+        Update or create a blob in the stage. If the value is the same as the
+        base snapshot, does nothing. Pass None to mark as deleted.
+        """
+        self.set_many({key: value})
+
+    def set_many(self, blobs: Mapping[str, Blob | None]) -> None:
+        """
+        Update multiple blobs in the stage. If the value is the same as the base
+        snapshot, does nothing. Pass None to mark as deleted.
+        """
         raise NotImplementedError()
 
     def commit(self) -> None:
-        """Commit the current stage to the repository history."""
+        """
+        Commit the current stage to the repository history.
+        """
         raise NotImplementedError()
 
     def is_dirty(self) -> bool:
-        """Check if the current stage has uncommitted changes."""
+        """
+        Check if the current stage has uncommitted changes.
+        """
         raise NotImplementedError()
 
     def switch_branch(self, branch: str) -> None:
-        """Switch the current working branch."""
+        """
+        Switch the current working branch.
+        """
         raise NotImplementedError()
 
     def create_branch(self, new_branch: str, from_branch: str | None = None) -> None:
-        """Create a new branch, optionally starting from an existing one."""
+        """
+        Create a new branch, optionally starting from an existing one.
+        """
         raise NotImplementedError()
 
     def list_branches(self) -> list[str]:
-        """List all available branches in the repository."""
+        """
+        List all available branches in the repository.
+        """
         raise NotImplementedError()
 
     def merge(self, branch: str) -> None:
-        """Merge another branch into the current branch."""
+        """
+        Merge another branch into the current branch.
+        """
         raise NotImplementedError()

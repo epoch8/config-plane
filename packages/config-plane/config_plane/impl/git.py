@@ -1,6 +1,6 @@
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from config_plane.base import ConfigRepo, ConfigSnapshot, ConfigStage, Blob
 from config_plane.impl.memory import MemoryConfigSnapshot
@@ -61,31 +61,24 @@ class GitConfigStage(ConfigStage):
                 return file_path.read_bytes()
             except OSError:
                 return None
-
-        # Fallback to snapshot if not on disk (meaning not modified/new, or deleted)
-        # Wait, if it's deleted in stage, it won't exist on disk.
-        # But if it exists in snapshot, we should return what?
-        # If I delete a file in git, it's gone.
-        # So "not existing on disk" could mean "deleted" OR "never checked out" (but this is a repo, files should be there)
-        # OR "unchanged from snapshot" (files should be there).
-
-        # Actually, in a standard git repo, the working directory CONTAINS the current stage.
-        # If the file isn't there, it's not there.
-        # However, `snapshot` might be pointing to a previous commit.
-        # If I am in a "dirty" state, the file on disk IS the value.
-        # If the file is missing on disk, it returns None.
         return None
 
-    def set(self, key: str, value: Blob | None) -> None:
-        file_path = self.work_path / f"{key}"
+    def set_many(self, blobs: Mapping[str, Blob | None]) -> None:
+        for key, value in blobs.items():
+            # Check for changes to avoid marking dirty if same
+            current_value = self.get(key)
+            if current_value == value:
+                continue
 
-        if value is None:
-            if file_path.exists():
-                file_path.unlink()
-                # We also need to tell git about the deletion if we want to be thorough,
-                # but `git add .` in freeze will catch it.
-        else:
-            file_path.write_bytes(value)
+            file_path = self.work_path / f"{key}"
+            if value is None:
+                if file_path.exists():
+                    file_path.unlink()
+            else:
+                # Ensure parent dirs?
+                if "/" in key:
+                    file_path.parent.mkdir(parents=True, exist_ok=True)
+                file_path.write_bytes(value)
 
     def is_dirty(self) -> bool:
         # Check if there are changes
@@ -168,11 +161,20 @@ class GitConfigRepo(ConfigRepo):
 
         self.stage = GitConfigStage(self.work_path, getattr(self, "base", None))  # type: ignore
 
-    def get(self, key: str) -> Blob | None:
+    def get(self, key: str, snapshot_id: str | None = None) -> Blob | None:
+        if snapshot_id:
+            return self.get_snapshot_blob(snapshot_id, key)
         return self.stage.get(key)
+
+    def get_snapshot_blob(self, snapshot_id: str, key: str) -> Blob | None:
+        snap = GitConfigSnapshot(self.work_path, snapshot_id)
+        return snap.get(key)
 
     def set(self, key: str, value: Blob | None) -> None:
         self.stage.set(key, value)
+
+    def set_many(self, blobs: Mapping[str, Blob | None]) -> None:
+        self.stage.set_many(blobs)
 
     def is_dirty(self) -> bool:
         return self.stage.is_dirty()
@@ -209,13 +211,19 @@ class GitConfigRepo(ConfigRepo):
         else:
             _run_git(self.work_path, ["branch", new_branch, start_point])
 
-        # If we just created it locally, we should probably push it upstream?
-        # Standard flow: create local, work, commit, push -u.
-        # But here we might want immediate existence on remote?
-        # Let's keep it simple: create local. commit() will push.
-        # Wait, commit() does `git push origin <branch>`.
-        # So we need to ensure upstream is set or just explicit push.
-        pass
+    def get_branch_snapshot_id(self, branch: str | None = None) -> str | None:
+        target = branch or self.branch
+        try:
+            return _run_git(self.work_path, ["rev-parse", target])
+        except subprocess.CalledProcessError:
+            return None
+
+    def snapshot_exists(self, snapshot_id: str) -> bool:
+        try:
+            _run_git(self.work_path, ["cat-file", "-e", f"{snapshot_id}^{{commit}}"])
+            return True
+        except subprocess.CalledProcessError:
+            return False
 
     def list_branches(self) -> list[str]:
         # List remote branches too?

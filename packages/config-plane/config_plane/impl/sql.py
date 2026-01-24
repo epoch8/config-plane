@@ -138,52 +138,88 @@ class SqlConfigStage(ConfigStage):
 
             return None
 
-    def set(self, key: str, value: Blob | None) -> None:
+    def set_many(self, blobs: Mapping[str, Blob | None]) -> None:
         with self.session_maker() as session:
-            stmt = select(SnapshotItemModel).where(
-                SnapshotItemModel.snapshot_id == self.snapshot_id,
-                SnapshotItemModel.key == key,
-            )
-            item = session.execute(stmt).scalar_one_or_none()
+            # Optimize: check existing values to avoid dirtying stage if unchanged
+            # We can use self.get(key) but that might be slow in loop (fetches one by one)
+            # Better: fetch all keys in one query?
+            # For now, let's just use self.get() logic or simple optimization:
 
-            if item:
-                # Item exists in stage
-                if value is None:
-                    item.blob_id = None
-                else:
-                    # Update existing blob in place
-                    if item.blob_id is not None:
-                        blob_stmt = select(BlobModel).where(
-                            BlobModel.id == item.blob_id
-                        )
-                        blob = session.execute(blob_stmt).scalar_one_or_none()
-                        if blob:
-                            blob.content = value
+            # Fetch current values for all keys in blobs
+            # If changed, apply update.
+
+            keys = list(blobs.keys())
+
+            # This is complex to do in bulk optimally without duplicating get logic.
+            # Let's iterate and use self.get() for correctness first, unless perf is critical.
+            # But we are inside a `set_many`, implementation should be somewhat efficient.
+
+            # To avoid N queries, we can try to fetch all relevant items from stage.
+            stage_items_stmt = select(SnapshotItemModel).where(
+                SnapshotItemModel.snapshot_id == self.snapshot_id,
+                SnapshotItemModel.key.in_(keys),
+            )
+            stage_items = {
+                item.key: item
+                for item in session.execute(stage_items_stmt).scalars().all()
+            }
+
+            # For items not in stage, we need to check parent.
+            # Optimization: If we just write to stage, we mark it dirty.
+            # Requirement: "check for changes before applying to avoid dirtiness"
+
+            for key, value in blobs.items():
+                current_value = self.get(
+                    key
+                )  # This uses existing logic (stage -> parent)
+
+                if current_value == value:
+                    continue
+
+                # Needs update
+                item = stage_items.get(key)
+                if item:
+                    # Update existing item in stage
+                    if value is None:
+                        item.blob_id = None
+                    else:
+                        if item.blob_id is not None:
+                            # Update blob content?
+                            # Blobs are immutable concept?
+                            # No, implementation of set says "Update existing blob in place"
+                            # But wait, if we share blobs, we shouldn't update in place?
+                            # Definition: "Stage owns some blobs... These blobs can be modified in place"
+                            blob_stmt = select(BlobModel).where(
+                                BlobModel.id == item.blob_id
+                            )
+                            blob = session.execute(blob_stmt).scalar_one_or_none()
+                            if blob:
+                                blob.content = value
+                            else:
+                                new_blob = BlobModel(content=value)
+                                session.add(new_blob)
+                                session.flush()
+                                item.blob_id = new_blob.id
                         else:
-                            # Should not happen ideally
                             new_blob = BlobModel(content=value)
                             session.add(new_blob)
                             session.flush()
                             item.blob_id = new_blob.id
-                    else:
-                        # Was deleted, now setting value -> create new blob
+                else:
+                    # Create new item in stage
+                    blob_id = None
+                    if value is not None:
                         new_blob = BlobModel(content=value)
                         session.add(new_blob)
                         session.flush()
-                        item.blob_id = new_blob.id
-            else:
-                # Item missing in stage, create new entry
-                blob_id = None
-                if value is not None:
-                    new_blob = BlobModel(content=value)
-                    session.add(new_blob)
-                    session.flush()
-                    blob_id = new_blob.id
+                        blob_id = new_blob.id
 
-                new_item = SnapshotItemModel(
-                    snapshot_id=self.snapshot_id, key=key, blob_id=blob_id
-                )
-                session.add(new_item)
+                    new_item = SnapshotItemModel(
+                        snapshot_id=self.snapshot_id, key=key, blob_id=blob_id
+                    )
+                    session.add(new_item)
+                    # Add to local cache if we were looping (but we re-query or use separate logic)
+                    # Here we just add to session
 
             session.flush()
             session.commit()
@@ -282,9 +318,7 @@ class SqlConfigRepo(ConfigRepo):
 
             session.commit()
 
-        self.stage = SqlConfigStage(
-            self.session_maker, self.parent_snapshot, self.stage_snapshot_id
-        )
+        self._refresh_stage_object()
 
     def _init_stage_from_branch(self, session: Session) -> None:
         # Try to get branch
@@ -305,6 +339,11 @@ class SqlConfigRepo(ConfigRepo):
         session.flush()
         self.stage_snapshot_id = new_snap.id
 
+    def _refresh_stage_object(self) -> None:
+        self.stage = SqlConfigStage(
+            self.session_maker, self.parent_snapshot, self.stage_snapshot_id
+        )
+
     def _repr_pretty_(self, p: Any, cycle: bool) -> None:
         if cycle:
             p.text("SqlConfigRepo(...)")
@@ -317,152 +356,219 @@ class SqlConfigRepo(ConfigRepo):
                 p.pretty(self.stage)
                 p.breakable()
 
-    def get(self, key: str) -> Blob | None:
+    def get(self, key: str, snapshot_id: str | None = None) -> Blob | None:
+        if snapshot_id is not None:
+            return self.get_snapshot_blob(int(snapshot_id), key)
         return self.stage.get(key)
 
     def set(self, key: str, value: Blob | None) -> None:
         self.stage.set(key, value)
 
+    def set_many(self, blobs: Mapping[str, Blob | None]) -> None:
+        self.stage.set_many(blobs)
+
     def is_dirty(self) -> bool:
         return self.stage.is_dirty()
 
     def commit(self) -> None:
+        if not self.is_dirty():
+            return
+
         with self.session_maker() as session:
-            # Finalize the stage
+            # Finalize the current stage (snapshot)
             self.stage._finalize_commit(session)
 
-            # Update branch
+            # Update branch pointer
             branch_model = session.execute(
                 select(BranchModel).where(BranchModel.name == self.branch)
             ).scalar_one_or_none()
 
+            new_snap_id = self.stage.snapshot_id
+
             if branch_model:
-                branch_model.snapshot_id = self.stage_snapshot_id
+                branch_model.snapshot_id = new_snap_id
             else:
-                branch_model = BranchModel(
-                    name=self.branch, snapshot_id=self.stage_snapshot_id
-                )
-            session.add(branch_model)
+                branch_model = BranchModel(name=self.branch, snapshot_id=new_snap_id)
+                session.add(branch_model)
 
-            # Start new stage from this new commit
-            parent_id = self.stage_snapshot_id
-            self.parent_snapshot = SqlConfigSnapshot(self.session_maker, parent_id)
-
-            new_snap = SnapshotModel(parent_id=parent_id, committed=False)
-            session.add(new_snap)
             session.flush()
-            self.stage_snapshot_id = new_snap.id
 
-            self.stage = SqlConfigStage(
-                self.session_maker, self.parent_snapshot, self.stage_snapshot_id
-            )
+            # Reset stage: Create new ephemeral snapshot on top of new commit
+            self.parent_snapshot = SqlConfigSnapshot(self.session_maker, new_snap_id)
+            new_stage_snap = SnapshotModel(parent_id=new_snap_id, committed=False)
+            session.add(new_stage_snap)
+            session.flush()
+            self.stage_snapshot_id = new_stage_snap.id
 
             session.commit()
+
+        self._refresh_stage_object()
 
     def switch_branch(self, branch: str) -> None:
         if self.is_dirty():
             raise RuntimeError("Cannot switch branch with dirty stage")
 
-        self.branch = branch
+        with self.session_maker() as session:
+            branch_exists = session.execute(
+                select(BranchModel).where(BranchModel.name == branch)
+            ).scalar_one_or_none()
 
+            if not branch_exists:
+                # Auto-create empty if not exists (matching MemoryRepo behavior for robustness)
+                # Create empty root snapshot
+                empty_snap = SnapshotModel(parent_id=None, committed=True)
+                session.add(empty_snap)
+                session.flush()
+                new_branch_model = BranchModel(name=branch, snapshot_id=empty_snap.id)
+                session.add(new_branch_model)
+                session.commit()
+
+        self.branch = branch
         with self.session_maker() as session:
             self._init_stage_from_branch(session)
             session.commit()
-
-        self.stage = SqlConfigStage(
-            self.session_maker, self.parent_snapshot, self.stage_snapshot_id
-        )
+        self._refresh_stage_object()
 
     def create_branch(self, new_branch: str, from_branch: str | None = None) -> None:
         with self.session_maker() as session:
-            # Check if already exists
-            existing = session.execute(
+            # Check if new branch exists
+            exists = session.execute(
                 select(BranchModel).where(BranchModel.name == new_branch)
             ).scalar_one_or_none()
-            if existing:
+            if exists:
                 raise ValueError(f"Branch '{new_branch}' already exists")
 
-            source_name = from_branch or self.branch
+            start_point = from_branch or self.branch
+
+            # Get source snapshot ID
             source = session.execute(
-                select(BranchModel).where(BranchModel.name == source_name)
+                select(BranchModel).where(BranchModel.name == start_point)
             ).scalar_one_or_none()
 
-            snapshot_id = source.snapshot_id if source else None
+            if not source:
+                raise ValueError(f"Source '{start_point}' not found")
 
-            if snapshot_id is None and source_name != "master":
-                # If source doesn't exist AND it's not master (which might be implicit empty)
-                # But here we only create branch if we persist it?
-                # Actually, we can create a branch pointing to nothing?
-                # No, branch points to a snapshot.
-                # If source is empty (no master yet), we can't really branch from it unless we point to NULL?
-                # SnapshotModel parent_id can be null.
-                # But BranchModel snapshot_id is not nullable in definition above?
-                # `snapshot_id: Mapped[int] = mapped_column(ForeignKey("snapshots.id"))` -> NOT NULL by default in Mapped[int]
-                pass
-
-            if snapshot_id is None:
-                # If master doesn't exist, we can't easily branch off it unless we treat it as empty root?
-                # But we need a snapshot ID.
-                # If the repo is empty, we must create a root snapshot first?
-                # Or we can't create branch until 1st commit?
-                # Let's say we can't create branch if source doesn't exist.
-                if source_name == "master":
-                    # Allow creating from empty master?
-                    # We need a dummy empty snapshot committed?
-                    # For now, let's assume one must commit to master first.
-                    raise ValueError(f"Source branch '{source_name}' does not exist")
-                else:
-                    raise ValueError(f"Source branch '{source_name}' does not exist")
-
-            new_branch_model = BranchModel(name=new_branch, snapshot_id=snapshot_id)
+            # Create branch pointing to same snapshot
+            new_branch_model = BranchModel(
+                name=new_branch, snapshot_id=source.snapshot_id
+            )
             session.add(new_branch_model)
             session.commit()
 
     def list_branches(self) -> list[str]:
-        stmt = select(BranchModel.name)
         with self.session_maker() as session:
-            return list(session.execute(stmt).scalars().all())
+            branches = session.execute(select(BranchModel.name)).scalars().all()
+            return list(branches)
 
-    def reload(self) -> None:
+    def merge(self, branch: str) -> None:
+        # Simple overlay merge: apply all keys from other branch to current stage
         with self.session_maker() as session:
-            """Reload the repository state from the storage."""
-            # Refresh branch pointer
-            branch_model = session.execute(
-                select(BranchModel).where(BranchModel.name == self.branch)
+            other_branch = session.execute(
+                select(BranchModel).where(BranchModel.name == branch)
             ).scalar_one_or_none()
 
-            parent_id = None
-            if branch_model:
-                parent_id = branch_model.snapshot_id
-                # Optimization: could check if self.parent_snapshot.id == parent_id
-                # But creating SqlConfigSnapshot is cheap.
-                self.parent_snapshot = SqlConfigSnapshot(self.session_maker, parent_id)
-            else:
-                self.parent_snapshot = None
+            if not other_branch:
+                raise ValueError(f"Branch '{branch}' does not exist")
 
-            # Update stage parent
-            self.stage.parent = self.parent_snapshot
+            other_snap_id = other_branch.snapshot_id
 
-    def get_branch_head(self, branch: str | None = None) -> int | None:
+        # We need to fetch all items for that snapshot (recursively resolving parents?)
+        # SqlConfigSnapshot.get fetches one by one.
+        # Ideally we want a `get_all` or iterator.
+        # But ConfigSnapshot interface doesn't strictly have iteration.
+        # Wait, if we don't have iteration, how do we merge "everything"?
+        # MemoryRepo iterates `snapshot.data`.
+        # SqlConfigSnapshot doesn't expose data.
+
+        # We need to implement a way to dump the snapshot.
+        other_snap = SqlConfigSnapshot(self.session_maker, other_snap_id)
+
+        # Helper to dump:
+        all_data = self._dump_snapshot(other_snap_id)
+        self.stage.set_many(all_data)
+
+    def _dump_snapshot(self, snapshot_id: int) -> dict[str, Blob]:
+        """Flatten snapshot history to get all current kv pairs"""
+        # This can be expensive. We walk up the parents.
+        # Or we can do a recursive query or iterative python.
+        # Since we overlay: child overrides parent.
+        # We collect from root to leaf? No, from leaf to root is easier to just find set of keys,
+        # but to get values, maybe root to leaf is better to overwrite.
+
+        # 1. build lineage
+        with self.session_maker() as session:
+            chain = []
+            curr = snapshot_id
+            while curr is not None:
+                chain.append(curr)
+                snap = session.execute(
+                    select(SnapshotModel.parent_id).where(SnapshotModel.id == curr)
+                ).scalar_one()
+                curr = snap  # snap is just parent_id? No, scalar_one returns int?
+                # select(SnapshotModel.parent_id) returns int.
+
+            # Wait, scalar_one() on select(SnapshotModel.parent_id) returns the ID directly?
+            # Yes if we select column.
+
+            # Correct logic:
+            # snap = session.get(SnapshotModel, curr)
+            # curr = snap.parent_id
+            pass
+
+            # Better implementation of walking:
+            chain = []
+            curr = snapshot_id
+            while curr is not None:
+                chain.append(curr)
+                parent_id = session.execute(
+                    select(SnapshotModel.parent_id).where(SnapshotModel.id == curr)
+                ).scalar_one_or_none()
+                curr = parent_id
+
+        # Chain is [leaf, ..., root]
+        # We want to iterate from root to leaf to build partial
+        chain.reverse()
+
+        result = {}
+        with self.session_maker() as session:
+            for snap_id in chain:
+                # Get all items in this snapshot
+                items = (
+                    session.execute(
+                        select(SnapshotItemModel).where(
+                            SnapshotItemModel.snapshot_id == snap_id
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+
+                for item in items:
+                    if item.blob_id is None:
+                        # deletion
+                        result.pop(item.key, None)
+                    else:
+                        # fetch content
+                        # optimize: eager load?
+                        if item.blob:
+                            content = item.blob.content
+                        else:
+                            content = session.execute(
+                                select(BlobModel.content).where(
+                                    BlobModel.id == item.blob_id
+                                )
+                            ).scalar_one()
+                        result[item.key] = content
+
+        return result
+
+    def get_branch_snapshot_id(self, branch: str | None = None) -> str | None:
         """Return snapshot id for branch head, if any"""
         with self.session_maker() as session:
             branch_model = session.execute(
                 select(BranchModel).where(BranchModel.name == (branch or self.branch))
             ).scalar_one_or_none()
-            return branch_model.snapshot_id if branch_model else None
-
-    def set_branch_head(self, branch: str, snapshot_id: int) -> None:
-        """Point branch to a snapshot, creating the branch if necessary"""
-        with self.session_maker() as session:
-            branch_model = session.execute(
-                select(BranchModel).where(BranchModel.name == branch)
-            ).scalar_one_or_none()
-            if branch_model:
-                branch_model.snapshot_id = snapshot_id
-            else:
-                branch_model = BranchModel(name=branch, snapshot_id=snapshot_id)
-                session.add(branch_model)
-            session.commit()
+            return str(branch_model.snapshot_id) if branch_model else None
 
     def get_snapshot_blob(self, snapshot_id: int, key: str) -> Blob | None:
         """Fetch a blob payload by snapshot id + key"""
@@ -476,45 +582,26 @@ class SqlConfigRepo(ConfigRepo):
             if item is None or item.blob_id is None:
                 return None
 
+            if item.blob:
+                return item.blob.content
+
             blob = session.execute(
                 select(BlobModel).where(BlobModel.id == item.blob_id)
             ).scalar_one_or_none()
             return blob.content if blob else None
 
-    def snapshot_exists(self, snapshot_id: int) -> bool:
+    def snapshot_exists(self, snapshot_id: str) -> bool:
         """Return True if snapshot id exists"""
+        try:
+            snap_id_int = int(snapshot_id)
+        except ValueError:
+            return False
+
         with self.session_maker() as session:
             found = session.execute(
-                select(SnapshotModel.id).where(SnapshotModel.id == snapshot_id)
+                select(SnapshotModel.id).where(SnapshotModel.id == snap_id_int)
             ).scalar_one_or_none()
             return found is not None
-
-    def commit_if_changed(self, key: str, blob: Blob | None) -> int | None:
-        """Commit blobs only if they differ from branch head."""
-        return self.commit_if_changed_many({key: blob})
-
-    def commit_if_changed_many(self, blob_map: Mapping[str, Blob | None]) -> int | None:
-        if not blob_map:
-            return self.get_branch_head()
-
-        head_id = self.get_branch_head()
-        if head_id is not None:
-            unchanged = True
-            for k, v in blob_map.items():
-                existing = self.get_snapshot_blob(head_id, k)
-                if existing != v:
-                    unchanged = False
-                    break
-            if unchanged:
-                return head_id
-
-        for k, v in blob_map.items():
-            self.set(k, v)
-        self.commit()
-
-        if self.parent_snapshot:
-            return self.parent_snapshot.snapshot_id
-        return self.stage_snapshot_id
 
 
 def create_sql_config_repo(
