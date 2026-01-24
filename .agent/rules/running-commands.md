@@ -1,9 +1,8 @@
 ---
-description: Run project tests
+trigger: always_on
 ---
-# Run Tests
 
-Run all tests using uv:
+Run all commands using uv
 
 ```bash
 uv run pytest
