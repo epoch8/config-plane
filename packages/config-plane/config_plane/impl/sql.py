@@ -100,7 +100,7 @@ class SqlConfigStage(ConfigStage):
         self,
         session_maker: Callable[[], Session],
         parent_snapshot: SqlConfigSnapshot | None,
-        stage_snapshot_id: int,
+        stage_snapshot_id: int | None,
     ) -> None:
         self.session_maker = session_maker
         self.parent = parent_snapshot
@@ -120,6 +120,10 @@ class SqlConfigStage(ConfigStage):
                 p.breakable()
 
     def get(self, key: str) -> Blob | None:
+        if self.snapshot_id is None:
+            # No stage snapshot yet (lazy), delegate to parent
+            return self.parent.get(key) if self.parent else None
+
         with self.session_maker() as session:
             # Check current sparse snapshot first
             stmt = select(SnapshotItemModel).where(
@@ -140,23 +144,32 @@ class SqlConfigStage(ConfigStage):
                 blob = session.execute(blob_stmt).scalar_one_or_none()
                 return blob.content if blob else None
 
-            # Not found in stage, check parent
-            if self.parent:
-                return self.parent.get(key)
+        # Not found in stage, check parent
+        if self.parent:
+            return self.parent.get(key)
 
-            return None
+        return None
 
     def set_many(self, blobs: Mapping[str, Blob | None]) -> None:
         with self.session_maker() as session:
-            # Optimize: check existing values to avoid dirtying stage if unchanged
-            # We can use self.get(key) but that might be slow in loop (fetches one by one)
-            # Better: fetch all keys in one query?
-            # For now, let's just use self.get() logic or simple optimization:
+            # check for changes before ensuring snapshot; this helps avoid making snapshots with duplicate blobs
+            changes: dict[str, Blob | None] = {}
+            for key, value in blobs.items():
+                current_value = self.get(key)
+                if current_value != value:
+                    changes[key] = value
 
-            # Fetch current values for all keys in blobs
-            # If changed, apply update.
+            if not changes:
+                return
 
-            keys = list(blobs.keys())
+            if self.snapshot_id is None:
+                parent_id = self.parent.snapshot_id if self.parent else None
+                new_snap = SnapshotModel(parent_id=parent_id, committed=False)
+                session.add(new_snap)
+                session.flush()
+                self.snapshot_id = new_snap.id
+
+            keys = list(changes.keys())
 
             # This is complex to do in bulk optimally without duplicating get logic.
             # Let's iterate and use self.get() for correctness first, unless perf is critical.
@@ -176,14 +189,7 @@ class SqlConfigStage(ConfigStage):
             # Optimization: If we just write to stage, we mark it dirty.
             # Requirement: "check for changes before applying to avoid dirtiness"
 
-            for key, value in blobs.items():
-                current_value = self.get(
-                    key
-                )  # This uses existing logic (stage -> parent)
-
-                if current_value == value:
-                    continue
-
+            for key, value in changes.items():
                 # Needs update
                 item = stage_items.get(key)
                 if item:
@@ -233,6 +239,8 @@ class SqlConfigStage(ConfigStage):
             session.commit()
 
     def is_dirty(self) -> bool:
+        if self.snapshot_id is None:
+            return False
         with self.session_maker() as session:
             # Check if any items exist in the sparse snapshot
             stmt = select(SnapshotItemModel).where(
@@ -249,7 +257,16 @@ class SqlConfigStage(ConfigStage):
         # If we need a frozen snapshot, we would technically need to commit or fork?
         # The base interface says `freeze() -> ConfigSnapshot`.
         # For now, let's treat the current stage view as a snapshot read.
-        return SqlConfigSnapshot(self.session_maker, self.snapshot_id)
+        if self.snapshot_id is not None:
+            return SqlConfigSnapshot(self.session_maker, self.snapshot_id)
+        if self.parent:
+            return self.parent
+        with self.session_maker() as session:  # if snapshot_id cannot be found (lazy init), we create it here
+            empty_snap = SnapshotModel(parent_id=None, committed=True)
+            session.add(empty_snap)
+            session.flush()
+            session.commit()
+            return SqlConfigSnapshot(self.session_maker, empty_snap.id)
 
     def _finalize_commit(self, session: Session) -> None:
         """Helper to fill in gaps from parent before marking committed."""
@@ -307,7 +324,7 @@ class SqlConfigRepo(ConfigRepo):
         self.parent_snapshot: SqlConfigSnapshot | None = None
 
         with self.session_maker() as session:
-            if stage_snapshot_id:
+            if stage_snapshot_id is not None:
                 # Resuming
                 self.stage_snapshot_id = stage_snapshot_id
                 # Determine parent from the snapshot
@@ -340,12 +357,7 @@ class SqlConfigRepo(ConfigRepo):
             self.parent_snapshot = SqlConfigSnapshot(self.session_maker, parent_id)
         else:
             self.parent_snapshot = None
-
-        # Create new ephemeral snapshot
-        new_snap = SnapshotModel(parent_id=parent_id, committed=False)
-        session.add(new_snap)
-        session.flush()
-        self.stage_snapshot_id = new_snap.id
+        self.stage_snapshot_id = None
 
     def _refresh_stage_object(self) -> None:
         self.stage = SqlConfigStage(
@@ -391,6 +403,8 @@ class SqlConfigRepo(ConfigRepo):
                 select(BranchModel).where(BranchModel.name == self.branch)
             ).scalar_one_or_none()
 
+            if self.stage.snapshot_id is None:
+                raise RuntimeError("Cannot commit without a stage snapshot")
             new_snap_id = self.stage.snapshot_id
 
             if branch_model:
@@ -401,12 +415,9 @@ class SqlConfigRepo(ConfigRepo):
 
             session.flush()
 
-            # Reset stage: Create new ephemeral snapshot on top of new commit
+            # Reset stage: point to new commit; create stage snapshot lazily when actual changes are presented
             self.parent_snapshot = SqlConfigSnapshot(self.session_maker, new_snap_id)
-            new_stage_snap = SnapshotModel(parent_id=new_snap_id, committed=False)
-            session.add(new_stage_snap)
-            session.flush()
-            self.stage_snapshot_id = new_stage_snap.id
+            self.stage_snapshot_id = None
 
             session.commit()
 
