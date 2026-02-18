@@ -603,4 +603,6 @@ def create_sql_config_repo(
     stage_snapshot_id: int | None = None,
     branch: str = "master",
 ) -> SqlConfigRepo:
+    with session_maker() as session:
+        Base.metadata.create_all(bind=session.get_bind())
     return SqlConfigRepo(session_maker, stage_snapshot_id, branch=branch)
