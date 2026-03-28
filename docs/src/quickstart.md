@@ -54,8 +54,18 @@ from pathlib import Path
 from config_plane.impl.git import create_git_config_repo
 
 repo_path = Path("./my-config-repo")
-repo = create_git_config_repo(repo_path)
+# Note: remote_url is required for cloning/pushing
+repo = create_git_config_repo(
+    repo_path, 
+    remote_url="git@github.com:user/my-config-repo.git",
+    branch="main"
+)
 
-repo.set("server", b'{"host": "0.0.0.0"}')
+# Set multiple values efficiently
+repo.set_many({
+    "server": b'{"host": "0.0.0.0"}',
+    "client": b'{"timeout": 5000}'
+})
 repo.commit()
+```
 ```

@@ -178,7 +178,8 @@ def test_repo_persistence(tmp_path: Path, provider_cls: type[RepoProvider]):
         repo1.commit()
         repo_provider.cleanup(repo1)
     except Exception:
-        pass
+        # We want to fail if setup fails now
+        raise
 
     # Basic cleanup robustness improvement
     repo2 = None
@@ -190,3 +191,138 @@ def test_repo_persistence(tmp_path: Path, provider_cls: type[RepoProvider]):
     finally:
         if repo2:
             repo_provider.cleanup(repo2)
+
+
+@pytest.mark.parametrize("provider_cls", PROVIDERS, ids=PROVIDER_IDS)
+def test_config_repo_set_many_no_op(tmp_path: Path, provider_cls: type[RepoProvider]):
+    repo_provider = provider_cls()
+    repo = repo_provider.create(tmp_path)
+    try:
+        # Initial state setup
+        repo.set_many({"foo": b"bar", "baz": b"qux"})
+        assert repo.is_dirty()
+        repo.commit()
+
+        # Initial state check
+        assert repo.get("foo") == b"bar"
+        assert not repo.is_dirty()
+
+        # Set with same value -> should be no-op (not dirty)
+        repo.set("foo", b"bar")
+        assert not repo.is_dirty()
+
+        # Set many with same values
+        repo.set_many({"foo": b"bar", "baz": b"qux"})
+        assert not repo.is_dirty()
+    finally:
+        repo_provider.cleanup(repo)
+
+
+@pytest.mark.parametrize("provider_cls", PROVIDERS, ids=PROVIDER_IDS)
+def test_config_repo_set_many_mixed(tmp_path: Path, provider_cls: type[RepoProvider]):
+    repo_provider = provider_cls()
+    repo = repo_provider.create(tmp_path)
+    try:
+        # Initial state setup
+        repo.set_many({"foo": b"bar", "baz": b"qux"})
+        repo.commit()
+
+        # Set mixed: foo changed, baz same, new key
+        repo.set_many({"foo": b"bar2", "baz": b"qux", "new": b"val"})
+
+        assert repo.is_dirty()
+        assert repo.get("foo") == b"bar2"
+        assert repo.get("baz") == b"qux"
+        assert repo.get("new") == b"val"
+    finally:
+        repo_provider.cleanup(repo)
+
+
+@pytest.mark.parametrize("provider_cls", PROVIDERS, ids=PROVIDER_IDS)
+def test_snapshot_tracking(tmp_path: Path, provider_cls: type[RepoProvider]):
+    repo_provider = provider_cls()
+    repo = repo_provider.create(tmp_path)
+    try:
+        repo.set("a", b"1")
+        repo.commit()
+
+        head1 = repo.get_branch_snapshot_id()
+        assert head1 is not None
+        assert repo.snapshot_exists(head1)
+
+        repo.set("a", b"2")
+        repo.commit()
+        head2 = repo.get_branch_snapshot_id()
+
+        assert head2 != head1
+
+        # Check we can read old snapshot
+        assert repo.get("a", snapshot_id=head1) == b"1"
+        assert repo.get("a", snapshot_id=head2) == b"2"
+    finally:
+        repo_provider.cleanup(repo)
+
+
+@pytest.mark.parametrize("provider_cls", PROVIDERS, ids=PROVIDER_IDS)
+def test_branch_manipulation(tmp_path: Path, provider_cls: type[RepoProvider]):
+    repo_provider = provider_cls()
+    repo = repo_provider.create(tmp_path)
+    try:
+        repo.set("a", b"1")
+        repo.commit()
+        head = repo.get_branch_snapshot_id()
+
+        # Create dev branch from current master
+        repo.create_branch("dev")
+        assert repo.get_branch_snapshot_id("dev") == head
+
+        # Move dev branch
+        repo.switch_branch("dev")
+        repo.set("a", b"2")
+        repo.commit()
+
+        dev_head = repo.get_branch_snapshot_id("dev")
+        assert dev_head != head
+        assert dev_head != repo.get_branch_snapshot_id("master")
+
+        # Master should still be at head
+        assert repo.get_branch_snapshot_id("master") == head
+
+    finally:
+        repo_provider.cleanup(repo)
+
+
+@pytest.mark.parametrize("provider_cls", PROVIDERS, ids=PROVIDER_IDS)
+def test_set_branch_snapshot_id(tmp_path: Path, provider_cls: type[RepoProvider]):
+    repo_provider = provider_cls()
+    repo = repo_provider.create(tmp_path)
+    try:
+        # Create initial snap
+        repo.set("a", b"1")
+        repo.commit()
+        snap1 = repo.get_branch_snapshot_id()
+        assert snap1 is not None
+
+        # Create second snap
+        repo.set("a", b"2")
+        repo.commit()
+        snap2 = repo.get_branch_snapshot_id()
+        assert snap2 != snap1
+
+        # Verify current state
+        assert repo.get("a") == b"2"
+
+        # Reset to snap1
+        repo.set_branch_snapshot_id(snap1)
+
+        # Verify branch head moved
+        assert repo.get_branch_snapshot_id() == snap1
+
+        # Verify content reverted
+        assert repo.get("a") == b"1"
+
+        # Verify stage is clean (optional, but good sanity)
+        assert not repo.is_dirty()
+
+    finally:
+        repo_provider.cleanup(repo)
